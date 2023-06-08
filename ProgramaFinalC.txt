@@ -1,0 +1,201 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <omp.h>
+#include <time.h>
+int leerArchivo(int filas, int columnas, double** matrix, const char* nameArchivo) {
+    // Abrir el archivo
+    FILE* archivo;
+    fopen_s(&archivo,nameArchivo, "r");
+    if (archivo == NULL) {
+        printf("Error al abrir el archivo %s\n", "matrixA2500.txt");
+        return 0;
+    }
+
+    // Leer los elementos de la matrizA desde el archivo
+    for (int i = 0; i < filas; i++) {
+        for (int j = 0; j < columnas; j++) {
+            fscanf_s(archivo, "%lf", &matrix[i][j]);
+        }
+    }
+
+    // Cerrar el archivo
+    fclose(archivo);
+    return 1;
+}
+
+void multiplicarMatrices(int filasA, int columnasB, int columnasA, double** matrixC, double** matrixA, double** matrixB) {
+    for (int i = 0; i < filasA; i++) {
+        for (int j = 0; j < columnasB; j++) {
+            matrixC[i][j] = 0.0;
+            for (int k = 0; k < columnasA; k++) {
+                matrixC[i][j] += matrixA[i][k] * matrixB[k][j];
+            }
+        }
+    }
+}
+
+void multiplicarOmp(int filasA, int columnasB, int columnasA, double** matrixC, double** matrixA, double** matrixB) {
+    #pragma omp parallel
+    {
+        #pragma omp for
+        for (int i = 0; i < filasA; i++) {
+            for (int j = 0; j < columnasB; j++) {
+                matrixC[i][j] = 0.0;
+                for (int k = 0; k < columnasA; k++) {
+                    matrixC[i][j] += matrixA[i][k] * matrixB[k][j];
+                }
+            }
+        }
+    }
+}
+
+int main() {
+    double** matrizA, ** matrizB, ** matrizC;
+    int filasA, columnasA, filasB, columnasB;
+    int error=0;
+    double tiempoTranscurrido;
+    clock_t start, end;
+
+    
+    printf("Ingrese el número de filasA: ");
+    scanf_s("%d", &filasA);
+    printf("Ingrese el número de columnasA: ");
+    scanf_s("%d", &columnasA);
+    printf("Ingrese el número de filasB: ");
+    scanf_s("%d", &filasB);
+    printf("Ingrese el número de columnasB: ");
+    scanf_s("%d", &columnasB);
+
+    if (columnasA != filasB) {
+        printf("No se puede multiplicar. El numero de Columnas A debe ser igual que las filasB");
+        return 0;
+    }
+
+    // Asignar memoria para las filas
+    matrizA = (double**)malloc(filasA * sizeof(double*));
+    if (matrizA == NULL) {
+        printf("Error al asignar memoria para las filas de la matrizA\n");
+        return 0;
+    }
+    matrizB = (double**)malloc(filasB * sizeof(double*));
+    if (matrizB == NULL) {
+        printf("Error al asignar memoria para las filas de la matrizB\n");
+        return 0;
+    }
+    matrizC = (double**)malloc(filasA * sizeof(double*));
+    if (matrizC == NULL) {
+        printf("Error al asignar memoria para las filas de la matrizC\n");
+        return 0;
+    }
+    // Asignar memoria para las columnas de cada fila
+    for (int i = 0; i < filasA; i++) {
+        matrizA[i] = (double*)malloc(columnasA * sizeof(double));
+        if (matrizA[i] == NULL) {
+            printf("Error al asignar memoria para las columnas de la matrizA\n");
+            for (int j = 0; j < i; j++) {
+                free(matrizA[j]);
+            }
+            free(matrizA);
+            return 0;
+        }
+    }
+
+    for (int i = 0; i < filasB; i++) {
+        matrizB[i] = (double*)malloc(columnasB * sizeof(double));
+        if (matrizB[i] == NULL) {
+            printf("Error al asignar memoria para las columnas de la matrizB\n");
+            for (int j = 0; j < i; j++) {
+                free(matrizB[j]);
+            }
+            free(matrizB);
+            return 0;
+        }
+    }
+    for (int i = 0; i < filasA; i++) {
+        matrizC[i] = (double*)malloc(columnasB * sizeof(double));
+        if (matrizC[i] == NULL) {
+            printf("Error al asignar memoria para las columnas de la matrizC\n");
+            for (int j = 0; j < i; j++) {
+                free(matrizC[j]);
+            }
+            free(matrizC);
+            return 0;
+        }
+    }
+
+
+    //leer Archivo con datos
+    error = leerArchivo(filasA, columnasA, matrizA, "matrixA5.txt");
+    if (error == 0) {
+        return 0;
+    }
+    
+    leerArchivo(filasB, columnasB, matrizB, "matrixB5.txt");
+    for (int z = 0; z < 5; z++) {
+
+        start = omp_get_wtime();
+        multiplicarMatrices(filasA, columnasB, columnasA, matrizC, matrizA, matrizB);
+        end = omp_get_wtime();
+
+        tiempoTranscurrido = ((double)(end - start)) / CLOCKS_PER_SEC;        
+
+       /* printf("La matrizA ingresada desde el archivo %s es:\n", "matrixA2500.txt");
+        for (int i = 0; i < filasA; i++) {
+            for (int j = 0; j < columnasA; j++) {
+                printf("%lf ", matrizA[i][j]);
+            }
+            printf("\n");
+        }
+        printf("La matrizB ingresada desde el archivo %s es:\n", "matrixB2500.txt");
+        for (int i = 0; i < filasB; i++) {
+            for (int j = 0; j < columnasB; j++) {
+                printf("%lf ", matrizB[i][j]);
+            }
+            printf("\n");
+        }*/
+
+        printf("%d: El tiempo (%f seg )El resultado de la multiplicacion de las matrices serial es:\n",z+1, tiempoTranscurrido);
+        for (int i = 0; i < filasA; i++) {
+            for (int j = 0; j < columnasB; j++) {
+                printf("%lf ", matrizC[i][j]);
+            }
+            printf("\n");
+        }
+        printf("\n");
+    }
+    printf("\n");
+    //openMP
+    for (int z = 0; z < 5; z++) {
+        start = omp_get_wtime();        
+        multiplicarOmp(filasA, columnasB, columnasA, matrizC, matrizA, matrizB);
+        end = omp_get_wtime();
+
+        tiempoTranscurrido = ((double)(end - start)) / CLOCKS_PER_SEC;
+
+        printf("%d: El tiempo (%f seg )El resultado de la multiplicacion de las matrices omp es:\n",z+1, tiempoTranscurrido);
+        for (int i = 0; i < filasA; i++) {
+            for (int j = 0; j < columnasB; j++) {
+                printf("%lf ", matrizC[i][j]);
+            }
+            printf("\n");
+        }
+        printf("\n");
+    }
+    printf("\n");
+    // Liberar memoria
+    for (int i = 0; i < filasA; i++) {
+        free(matrizA[i]);
+    }
+    // Liberar memoria
+    for (int i = 0; i < filasB; i++) {
+        free(matrizB[i]);
+    }
+    for (int i = 0; i < filasA; i++) {
+        free(matrizC[i]);
+    }
+    free(matrizA);
+    free(matrizB);
+    free(matrizC);
+
+    return 0;
+}
