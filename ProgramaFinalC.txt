@@ -1,201 +1,334 @@
+//Gabriel Turriza Rosales A00821962
 #include <stdio.h>
 #include <stdlib.h>
 #include <omp.h>
 #include <time.h>
+#include <immintrin.h>
+
 int leerArchivo(int filas, int columnas, double** matrix, const char* nameArchivo) {
-    // Abrir el archivo
-    FILE* archivo;
-    fopen_s(&archivo,nameArchivo, "r");
-    if (archivo == NULL) {
-        printf("Error al abrir el archivo %s\n", "matrixA2500.txt");
-        return 0;
-    }
+	FILE* archivo;
+	int elemEsperados = filas * columnas;
+	int elementosLeidos = 0;
+	// Abrir el archivo	
+	fopen_s(&archivo, nameArchivo, "r");
+	if (archivo == NULL) {
+		printf("Error al abrir el archivo %s\n", "matrixA2500.txt");
+		return 0;
+	}
 
-    // Leer los elementos de la matrizA desde el archivo
-    for (int i = 0; i < filas; i++) {
-        for (int j = 0; j < columnas; j++) {
-            fscanf_s(archivo, "%lf", &matrix[i][j]);
-        }
-    }
+	// Leer los elementos de la matrizA desde el archivo
+	for (int i = 0; i < filas; i++) {
+		for (int j = 0; j < columnas; j++) {
+			if (fscanf_s(archivo, "%lf", &matrix[i][j]) == 1) {
+				elementosLeidos++;
+			}
+		}
+	}
 
-    // Cerrar el archivo
-    fclose(archivo);
-    return 1;
+	if (elementosLeidos != elemEsperados) {
+		printf("No se leyeron suficientes elementos del archivo %s\n", nameArchivo);
+		fclose(archivo);
+		return 0;
+	}
+
+	// Cerrar el archivo
+	fclose(archivo);
+	return 1;
 }
 
+void escribirArchivo(int filas, int columnas, double** matrix, const char* nombreArchivo) {
+	// Abrir el archivo en modo escritura
+	FILE* archivo;
+	fopen_s(&archivo, nombreArchivo, "w");
+	if (archivo == NULL) {
+		printf("Error al abrir el archivo %s\n", nombreArchivo);
+		return;
+	}
+
+	// Escribir los elementos de la matriz en el archivo
+	for (int i = 0; i < filas; i++) {
+		for (int j = 0; j < columnas; j++) {
+			fprintf(archivo, "%lf ", matrix[i][j]);
+		}
+		fprintf(archivo, "\n");
+	}
+
+	// Cerrar el archivo
+	fclose(archivo);
+}
+
+
 void multiplicarMatrices(int filasA, int columnasB, int columnasA, double** matrixC, double** matrixA, double** matrixB) {
-    for (int i = 0; i < filasA; i++) {
-        for (int j = 0; j < columnasB; j++) {
-            matrixC[i][j] = 0.0;
-            for (int k = 0; k < columnasA; k++) {
-                matrixC[i][j] += matrixA[i][k] * matrixB[k][j];
-            }
-        }
-    }
+	for (int i = 0; i < filasA; i++) {
+		for (int j = 0; j < columnasB; j++) {
+			matrixC[i][j] = 0.0;
+			for (int k = 0; k < columnasA; k++) {
+				matrixC[i][j] += matrixA[i][k] * matrixB[k][j];
+			}
+		}
+	}
 }
 
 void multiplicarOmp(int filasA, int columnasB, int columnasA, double** matrixC, double** matrixA, double** matrixB) {
-    #pragma omp parallel
-    {
-        #pragma omp for
-        for (int i = 0; i < filasA; i++) {
-            for (int j = 0; j < columnasB; j++) {
-                matrixC[i][j] = 0.0;
-                for (int k = 0; k < columnasA; k++) {
-                    matrixC[i][j] += matrixA[i][k] * matrixB[k][j];
-                }
-            }
-        }
-    }
+#pragma omp parallel for 
+	for (int i = 0; i < filasA; i++) {
+		for (int j = 0; j < columnasB; j++) {
+			matrixC[i][j] = 0.0;
+			for (int k = 0; k < columnasA; k++) {
+				matrixC[i][j] += matrixA[i][k] * matrixB[k][j];
+			}
+		}
+	}
+
+}
+void multiplicarAvx(int filasA, int columnasB, int columnasA, double** matrixC, double** matrixA, double** matrixB) {
+	for (int i = 0; i < filasA; i++) {
+		for (int j = 0; j < columnasB; j += 4) {
+			__m256d acc = _mm256_setzero_pd();
+
+			for (int k = 0; k < columnasA; k++) {
+				__m256d a = _mm256_load_pd(&matrixA[i][k]);
+				__m256d b = _mm256_load_pd(&matrixB[k][j]);
+				acc = _mm256_fmadd_pd(a, b, acc);
+			}
+
+			_mm256_store_pd(&matrixC[i][j], acc);
+		}
+	}
 }
 
 int main() {
-    double** matrizA, ** matrizB, ** matrizC;
-    int filasA, columnasA, filasB, columnasB;
-    int error=0;
-    double tiempoTranscurrido;
-    clock_t start, end;
+	double** matrizA, ** matrizB, ** matrizC, **matrizComp,**matrizCavx;
+	double promedioSerial = 0, promedioOMP = 0, promedioAvx = 0;
+	int filasA, columnasA, filasB, columnasB;
+	int error = 0, matricesIgualesOmp = 1, matricesIgualesAvx = 1;
+	double tiempoTranscurridoSerial, tiempoTranscurridoOMP, tiempoTranscurridoAvx;
+	clock_t startSerial, endSerial, startOMP, endOMP, startAvx, endAvx;
+	char* envVar;
+	size_t len;
+	errno_t err = _dupenv_s(&envVar, &len, "OMP_NUM_THREADS");
+	if (err == 0 && envVar != nullptr) {
+		int maxThreads = atoi(envVar);
+		omp_set_num_threads(maxThreads);
+		free(envVar);
+	}
+	else {
+		printf("Variable de entorno OMP_NUM_THREADS no encontrada.\n");
+	}
 
-    
-    printf("Ingrese el número de filasA: ");
-    scanf_s("%d", &filasA);
-    printf("Ingrese el número de columnasA: ");
-    scanf_s("%d", &columnasA);
-    printf("Ingrese el número de filasB: ");
-    scanf_s("%d", &filasB);
-    printf("Ingrese el número de columnasB: ");
-    scanf_s("%d", &columnasB);
+	printf("Ingrese el numero de filasA: ");
+	scanf_s("%d", &filasA);
+	printf("Ingrese el numero de columnasA: ");
+	scanf_s("%d", &columnasA);
+	printf("Ingrese el numero de filasB: ");
+	scanf_s("%d", &filasB);
+	printf("Ingrese el numero de columnasB: ");
+	scanf_s("%d", &columnasB);
 
-    if (columnasA != filasB) {
-        printf("No se puede multiplicar. El numero de Columnas A debe ser igual que las filasB");
-        return 0;
-    }
+	if (columnasA != filasB) {
+		printf("No se puede multiplicar. El numero de Columnas A debe ser igual que las filasB");
+		return 0;
+	}
 
-    // Asignar memoria para las filas
-    matrizA = (double**)malloc(filasA * sizeof(double*));
-    if (matrizA == NULL) {
-        printf("Error al asignar memoria para las filas de la matrizA\n");
-        return 0;
-    }
-    matrizB = (double**)malloc(filasB * sizeof(double*));
-    if (matrizB == NULL) {
-        printf("Error al asignar memoria para las filas de la matrizB\n");
-        return 0;
-    }
-    matrizC = (double**)malloc(filasA * sizeof(double*));
-    if (matrizC == NULL) {
-        printf("Error al asignar memoria para las filas de la matrizC\n");
-        return 0;
-    }
-    // Asignar memoria para las columnas de cada fila
-    for (int i = 0; i < filasA; i++) {
-        matrizA[i] = (double*)malloc(columnasA * sizeof(double));
-        if (matrizA[i] == NULL) {
-            printf("Error al asignar memoria para las columnas de la matrizA\n");
-            for (int j = 0; j < i; j++) {
-                free(matrizA[j]);
-            }
-            free(matrizA);
-            return 0;
-        }
-    }
+	// Asignar memoria para las filas
+	matrizA = (double**)_aligned_malloc(filasA * sizeof(double*), 32);
+	if (matrizA == NULL) {
+		printf("Error al asignar memoria para las filas de la matrizA\n");
+		return 0;
+	}
+	matrizB = (double**)_aligned_malloc(filasB * sizeof(double*), 32);
+	if (matrizB == NULL) {
+		printf("Error al asignar memoria para las filas de la matrizB\n");
+		_aligned_free(matrizA);
+		return 0;
+	}
+	matrizC = (double**)_aligned_malloc(filasA * sizeof(double*), 32);
+	if (matrizC == NULL) {
+		printf("Error al asignar memoria para las filas de la matrizC\n");
+		_aligned_free(matrizA);
+		_aligned_free(matrizB);
+		return 0;
+	}
+	matrizComp = (double**)_aligned_malloc(filasA * sizeof(double*), 32);
+	if (matrizComp == NULL) {
+		printf("Error al asignar memoria para las filas de la matrizC\n");
+		_aligned_free(matrizA);
+		_aligned_free(matrizB);
+		return 0;
+	}
+	matrizCavx = (double**)_aligned_malloc(filasA * sizeof(double*), 32);
+	if (matrizCavx == NULL) {
+		printf("Error al asignar memoria para las filas de la matrizC\n");
+		_aligned_free(matrizA);
+		_aligned_free(matrizB);
+		return 0;
+	}
+	// Asignar memoria para las columnas de cada fila
+	for (int i = 0; i < filasA; i++) {
+		matrizA[i] = (double*)_aligned_malloc(columnasA * sizeof(double), 32);
+		if (matrizA[i] == NULL) {
+			printf("Error al asignar memoria para las columnas de la matrizA\n");
+			for (int j = 0; j < i; j++) {
+				_aligned_free(matrizA[j]);
+			}
+			_aligned_free(matrizA);
+			return 0;
+		}
+	}
 
-    for (int i = 0; i < filasB; i++) {
-        matrizB[i] = (double*)malloc(columnasB * sizeof(double));
-        if (matrizB[i] == NULL) {
-            printf("Error al asignar memoria para las columnas de la matrizB\n");
-            for (int j = 0; j < i; j++) {
-                free(matrizB[j]);
-            }
-            free(matrizB);
-            return 0;
-        }
-    }
-    for (int i = 0; i < filasA; i++) {
-        matrizC[i] = (double*)malloc(columnasB * sizeof(double));
-        if (matrizC[i] == NULL) {
-            printf("Error al asignar memoria para las columnas de la matrizC\n");
-            for (int j = 0; j < i; j++) {
-                free(matrizC[j]);
-            }
-            free(matrizC);
-            return 0;
-        }
-    }
+	for (int i = 0; i < filasB; i++) {
+		matrizB[i] = (double*)_aligned_malloc(columnasB * sizeof(double), 32);
+		if (matrizB[i] == NULL) {
+			printf("Error al asignar memoria para las columnas de la matrizB\n");
+			for (int j = 0; j < i; j++) {
+				_aligned_free(matrizB[j]);
+			}
+			_aligned_free(matrizB);
+			return 0;
+		}
+	}
+	for (int i = 0; i < filasA; i++) {
+		matrizC[i] = (double*)_aligned_malloc(columnasB * sizeof(double), 32);
+		if (matrizC[i] == NULL) {
+			printf("Error al asignar memoria para las columnas de la matrizC\n");
+			for (int j = 0; j < i; j++) {
+				_aligned_free(matrizC[j]);
+			}
+			_aligned_free(matrizC);
+			return 0;
+		}
+	}
+	for (int i = 0; i < filasA; i++) {
+		matrizComp[i] = (double*)_aligned_malloc(columnasB * sizeof(double), 32);
+		if (matrizComp[i] == NULL) {
+			printf("Error al asignar memoria para las columnas de la matrizC\n");
+			for (int j = 0; j < i; j++) {
+				_aligned_free(matrizComp[j]);
+			}
+			_aligned_free(matrizComp);
+			return 0;
+		}
+	}
+	for (int i = 0; i < filasA; i++) {
+		matrizCavx[i] = (double*)_aligned_malloc(columnasB * sizeof(double), 32);
+		if (matrizCavx[i] == NULL) {
+			printf("Error al asignar memoria para las columnas de la matrizC\n");
+			for (int j = 0; j < i; j++) {
+				_aligned_free(matrizCavx[j]);
+			}
+			_aligned_free(matrizCavx);
+			return 0;
+		}
+	}
 
 
-    //leer Archivo con datos
-    error = leerArchivo(filasA, columnasA, matrizA, "matrixA5.txt");
-    if (error == 0) {
-        return 0;
-    }
-    
-    leerArchivo(filasB, columnasB, matrizB, "matrixB5.txt");
-    for (int z = 0; z < 5; z++) {
+	//leer Archivo con datos
+	//error = leerArchivo(filasA, columnasA, matrizA, "matrixA2500.txt");
+	error = leerArchivo(filasA, columnasA, matrizA, "matrixA.txt");
+	if (error == 0) {
+		return 0;
+	}
 
-        start = omp_get_wtime();
-        multiplicarMatrices(filasA, columnasB, columnasA, matrizC, matrizA, matrizB);
-        end = omp_get_wtime();
+	//leerArchivo(filasB, columnasB, matrizB, "matrixB2500.txt");
+	error = leerArchivo(filasA, columnasB, matrizB, "matrixB.txt");
+	if (error == 0) {
+		return 0;
+	}
+	printf("corrida-----------Serial-------------OMP--------------------AVX\n");
+	for (int z = 0; z < 5; z++) {
 
-        tiempoTranscurrido = ((double)(end - start)) / CLOCKS_PER_SEC;        
+		startSerial = clock();
+		multiplicarMatrices(filasA, columnasB, columnasA, matrizC, matrizA, matrizB);
+		endSerial = clock();
+		escribirArchivo(filasA, columnasB, matrizC, "matrizC.txt");
+		tiempoTranscurridoSerial = ((double)(endSerial - startSerial)) / CLOCKS_PER_SEC;
+		promedioSerial += tiempoTranscurridoSerial;
+		//printf("%d: El tiempo (%.10f seg )\n", z + 1, tiempoTranscurridoSerial);
 
-       /* printf("La matrizA ingresada desde el archivo %s es:\n", "matrixA2500.txt");
-        for (int i = 0; i < filasA; i++) {
-            for (int j = 0; j < columnasA; j++) {
-                printf("%lf ", matrizA[i][j]);
-            }
-            printf("\n");
-        }
-        printf("La matrizB ingresada desde el archivo %s es:\n", "matrixB2500.txt");
-        for (int i = 0; i < filasB; i++) {
-            for (int j = 0; j < columnasB; j++) {
-                printf("%lf ", matrizB[i][j]);
-            }
-            printf("\n");
-        }*/
 
-        printf("%d: El tiempo (%f seg )El resultado de la multiplicacion de las matrices serial es:\n",z+1, tiempoTranscurrido);
-        for (int i = 0; i < filasA; i++) {
-            for (int j = 0; j < columnasB; j++) {
-                printf("%lf ", matrizC[i][j]);
-            }
-            printf("\n");
-        }
-        printf("\n");
-    }
-    printf("\n");
-    //openMP
-    for (int z = 0; z < 5; z++) {
-        start = omp_get_wtime();        
-        multiplicarOmp(filasA, columnasB, columnasA, matrizC, matrizA, matrizB);
-        end = omp_get_wtime();
 
-        tiempoTranscurrido = ((double)(end - start)) / CLOCKS_PER_SEC;
+	//openMP	
 
-        printf("%d: El tiempo (%f seg )El resultado de la multiplicacion de las matrices omp es:\n",z+1, tiempoTranscurrido);
-        for (int i = 0; i < filasA; i++) {
-            for (int j = 0; j < columnasB; j++) {
-                printf("%lf ", matrizC[i][j]);
-            }
-            printf("\n");
-        }
-        printf("\n");
-    }
-    printf("\n");
-    // Liberar memoria
-    for (int i = 0; i < filasA; i++) {
-        free(matrizA[i]);
-    }
-    // Liberar memoria
-    for (int i = 0; i < filasB; i++) {
-        free(matrizB[i]);
-    }
-    for (int i = 0; i < filasA; i++) {
-        free(matrizC[i]);
-    }
-    free(matrizA);
-    free(matrizB);
-    free(matrizC);
+		startOMP = clock();
+		multiplicarOmp(filasA, columnasB, columnasA, matrizComp, matrizA, matrizB);
+		endOMP = clock();
+		
+		tiempoTranscurridoOMP = ((double)(endOMP - startOMP)) / CLOCKS_PER_SEC;
 
-    return 0;
+		//printf("%d: El tiempo (%.10f seg)\n", z + 1, tiempoTranscurridoOMP);
+
+		promedioOMP += tiempoTranscurridoOMP;
+		//AVX
+		startAvx = clock();
+		multiplicarAvx(filasA, columnasB, columnasA, matrizCavx, matrizA, matrizB);
+		endAvx = clock();
+		
+		tiempoTranscurridoAvx = ((double)(endAvx - startAvx)) / CLOCKS_PER_SEC;
+		promedioAvx += tiempoTranscurridoAvx;
+		printf("---%d-------(%.10f seg)--(%.10f seg)-------(%.10f seg)\n", z + 1, tiempoTranscurridoSerial, tiempoTranscurridoOMP, tiempoTranscurridoAvx);
+	}
+
+
+	printf("Promedio---(%.10f)------(%.10f)-----------(%.10f)\n", promedioSerial / 5, promedioOMP / 5, promedioAvx / 5);
+	printf("PorcentajevsSerial-------------(%.10f)-----------(%.10f)\n", (promedioOMP / 5) / (promedioSerial / 5), (promedioAvx / 5) / (promedioSerial / 5));
+	printf("\n");
+
+	for (int i = 0; i < filasA; i++) {
+		for (int j = 0; j < columnasB; j++) {
+			if (matrizC[i][j] != matrizComp[i][j]) {
+				matricesIgualesOmp = 0;
+				break;
+			}
+			if (matrizC[i][j] != matrizCavx[i][j]) {
+				matricesIgualesAvx = 0;
+				break;
+			}
+		}
+	}	
+
+	if (matricesIgualesOmp and matricesIgualesAvx) {
+		printf("Las matrices resultantes son idénticas.\n");
+	}
+	else {
+		if (matricesIgualesOmp) {
+			printf("Las matrices resultantes entre serial y OMP son iguales.\n");
+		}
+		else {
+			printf("La matriz resultante entre OMP y las demas son diferentes.\n");
+		}
+
+		if (matricesIgualesAvx) {
+			printf("Las matrices resultantes entre serial y AVX son iguales.\n");
+		}
+		else {
+			printf("La matriz resultante entre Avx y las demas son diferentes.\n");
+		}
+	}
+
+
+	// Liberar memoria
+	for (int i = 0; i < filasA; i++) {
+		_aligned_free(matrizA[i]);
+	}
+	// Liberar memoria
+	for (int i = 0; i < filasB; i++) {
+		_aligned_free(matrizB[i]);
+	}
+	for (int i = 0; i < filasA; i++) {
+		_aligned_free(matrizC[i]);
+	}
+	for (int i = 0; i < filasA; i++) {
+		_aligned_free(matrizComp[i]);
+	}
+	for (int i = 0; i < filasA; i++) {
+		_aligned_free(matrizCavx[i]);
+	}
+
+	_aligned_free(matrizA);
+	_aligned_free(matrizB);
+	_aligned_free(matrizC);
+	_aligned_free(matrizComp);
+	_aligned_free(matrizCavx);
+
+	return 0;
 }
